@@ -29,7 +29,9 @@ CREATE TABLE messages (
     channel_id INTEGER     NOT NULL REFERENCES channels (id) ON DELETE CASCADE,
     user_id    INTEGER              REFERENCES users    (id) ON DELETE SET NULL,
     content    TEXT        NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ
 );
 
 CREATE INDEX ix_messages_channel_id      ON messages (channel_id);
