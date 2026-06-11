@@ -8,6 +8,9 @@ import channels as ch_service
 import redis_client as rc
 from auth import require_auth
 from websocket import register_handlers
+from error_handlers import register_error_handlers
+from monitoring import get_health_status, start_health_logging
+from circuit_breaker import redis_breaker, db_breaker
 
 
 def create_app(config: dict | None = None, engine=None):
@@ -25,7 +28,6 @@ def create_app(config: dict | None = None, engine=None):
     app.db_engine = engine
     app.SessionFactory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
-    # REDIS_URL="" or absent → no message queue (single-process / test mode)
     redis_url = (
         app.config.get("REDIS_URL")
         if "REDIS_URL" in (config or {})
@@ -39,6 +41,7 @@ def create_app(config: dict | None = None, engine=None):
     )
     app.socketio = socketio
     register_handlers(socketio, app.SessionFactory)
+    register_error_handlers(app)
 
     # ------------------------------------------------------------------ db lifecycle
 
@@ -53,6 +56,23 @@ def create_app(config: dict | None = None, engine=None):
             if exc:
                 db.rollback()
             db.close()
+
+    # ------------------------------------------------------------------ health
+
+    @app.get("/health")
+    def health():
+        status = get_health_status(g.db)
+        # Return 503 only when the database is down — the app cannot serve requests.
+        # Redis / job-queue failures degrade gracefully, so we still return 200.
+        http_code = 503 if status["services"]["database"]["status"] != "ok" else 200
+        return jsonify(status), http_code
+
+    @app.get("/health/circuit-breakers")
+    def health_circuit_breakers():
+        return jsonify({
+            "redis":    redis_breaker.as_dict(),
+            "database": db_breaker.as_dict(),
+        })
 
     # ------------------------------------------------------------------ routes
 
@@ -69,13 +89,11 @@ def create_app(config: dict | None = None, engine=None):
 
         serialized = _serialize(msg)
 
-        # Broadcast to Socket.IO room — non-fatal if SocketIO is unavailable
         try:
             current_app.socketio.emit("new_message", serialized, room=f"channel:{channel_id}")
         except Exception:
             pass
 
-        # Publish to Redis for any non-Socket.IO consumers
         try:
             rc.publish_event(channel_id, "new_message", serialized)
         except Exception:
@@ -114,6 +132,10 @@ def create_app(config: dict | None = None, engine=None):
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
         return "", 204
+
+    # Start background health logging in production only
+    if not app.config.get("TESTING"):
+        start_health_logging(app)
 
     return app
 

@@ -119,6 +119,17 @@ def app_message(app_db, app_user, app_channel):
 
 # ------------------------------------------------------------------ celery helpers
 
+@pytest.fixture(autouse=True)
+def reset_circuit_breakers():
+    """Reset global circuit breakers before each test to prevent state leakage."""
+    from circuit_breaker import redis_breaker, db_breaker
+    redis_breaker.reset()
+    db_breaker.reset()
+    yield
+    redis_breaker.reset()
+    db_breaker.reset()
+
+
 @pytest.fixture
 def celery_eager():
     """Run Celery tasks synchronously with retries; exceptions stored in result."""
