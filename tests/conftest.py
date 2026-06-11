@@ -1,4 +1,5 @@
 import pytest
+import fakeredis
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -7,6 +8,15 @@ from users import create_user
 from channels import create_channel, join_channel
 from auth import make_token
 from app import create_app
+import redis_client
+
+
+# ------------------------------------------------------------------ redis mock
+# Replaces the module-level Redis client for every test so no real Redis needed.
+
+@pytest.fixture(autouse=True)
+def fake_redis(monkeypatch):
+    monkeypatch.setattr(redis_client, "_client", fakeredis.FakeRedis(decode_responses=True))
 
 
 # ------------------------------------------------------------------ unit test db
@@ -38,8 +48,7 @@ def channel(db, user):
 
 
 # ------------------------------------------------------------------ flask test app
-# StaticPool ensures all sessions share the same in-memory database, which is
-# required so data written by app_db fixtures is visible inside Flask requests.
+# StaticPool ensures all sessions (fixtures + Flask requests) share one in-memory DB.
 
 @pytest.fixture
 def flask_app():
@@ -49,8 +58,7 @@ def flask_app():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    app = create_app(engine=engine)
-    app.config["TESTING"] = True
+    app = create_app(config={"TESTING": True, "REDIS_URL": ""}, engine=engine)
     yield app
     Base.metadata.drop_all(engine)
 

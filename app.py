@@ -1,10 +1,13 @@
 import os
-from flask import Flask, jsonify, request, g
+from flask import Flask, jsonify, request, g, current_app
+from flask_socketio import SocketIO
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import messages as msg_service
 import channels as ch_service
+import redis_client as rc
 from auth import require_auth
+from websocket import register_handlers
 
 
 def create_app(config: dict | None = None, engine=None):
@@ -21,6 +24,23 @@ def create_app(config: dict | None = None, engine=None):
 
     app.db_engine = engine
     app.SessionFactory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    # REDIS_URL="" or absent → no message queue (single-process / test mode)
+    redis_url = (
+        app.config.get("REDIS_URL")
+        if "REDIS_URL" in (config or {})
+        else os.getenv("REDIS_URL", "")
+    )
+    socketio = SocketIO(
+        app,
+        message_queue=redis_url or None,
+        cors_allowed_origins="*",
+        async_mode="threading",
+    )
+    app.socketio = socketio
+    register_handlers(socketio, app.SessionFactory)
+
+    # ------------------------------------------------------------------ db lifecycle
 
     @app.before_request
     def open_db():
@@ -46,7 +66,22 @@ def create_app(config: dict | None = None, engine=None):
             return jsonify({"error": str(e)}), 422
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
-        return jsonify(_serialize(msg)), 201
+
+        serialized = _serialize(msg)
+
+        # Broadcast to Socket.IO room — non-fatal if SocketIO is unavailable
+        try:
+            current_app.socketio.emit("new_message", serialized, room=f"channel:{channel_id}")
+        except Exception:
+            pass
+
+        # Publish to Redis for any non-Socket.IO consumers
+        try:
+            rc.publish_event(channel_id, "new_message", serialized)
+        except Exception:
+            pass
+
+        return jsonify(serialized), 201
 
     @app.get("/channels/<int:channel_id>/messages")
     @require_auth
@@ -98,4 +133,5 @@ if __name__ == "__main__":
     from models import Base
     from database import engine as default_engine
     Base.metadata.create_all(default_engine)
-    create_app().run(debug=True)
+    _app = create_app()
+    _app.socketio.run(_app, debug=True)
