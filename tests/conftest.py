@@ -3,7 +3,7 @@ import fakeredis
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from models import Base
+from models import Base, Message
 from users import create_user
 from channels import create_channel, join_channel
 from auth import make_token
@@ -12,7 +12,6 @@ import redis_client
 
 
 # ------------------------------------------------------------------ redis mock
-# Replaces the module-level Redis client for every test so no real Redis needed.
 
 @pytest.fixture(autouse=True)
 def fake_redis(monkeypatch):
@@ -48,7 +47,6 @@ def channel(db, user):
 
 
 # ------------------------------------------------------------------ flask test app
-# StaticPool ensures all sessions (fixtures + Flask requests) share one in-memory DB.
 
 @pytest.fixture
 def flask_app():
@@ -100,3 +98,41 @@ def auth_headers(app_user):
 @pytest.fixture
 def other_auth_headers(app_other_user):
     return {"Authorization": f"Bearer {make_token(app_other_user.id)}"}
+
+
+# ------------------------------------------------------------------ app_message
+# Created directly (bypassing post_message) to avoid triggering job enqueueing
+# during test setup, which would attempt a real broker connection.
+
+@pytest.fixture
+def app_message(app_db, app_user, app_channel):
+    msg = Message(
+        channel_id=app_channel.id,
+        user_id=app_user.id,
+        content="test message content",
+    )
+    app_db.add(msg)
+    app_db.commit()
+    app_db.refresh(msg)
+    return msg
+
+
+# ------------------------------------------------------------------ celery helpers
+
+@pytest.fixture
+def celery_eager():
+    """Run Celery tasks synchronously with retries; exceptions stored in result."""
+    from celery_app import celery
+    celery.conf.update(task_always_eager=True, task_eager_propagates=False)
+    yield celery
+    celery.conf.update(task_always_eager=False, task_eager_propagates=False)
+
+
+@pytest.fixture
+def task_db(flask_app, monkeypatch):
+    """Wire Celery tasks to the test database."""
+    import tasks as t
+    session = flask_app.SessionFactory()
+    monkeypatch.setattr(t, "_session_factory", lambda: session)
+    yield session
+    session.close()

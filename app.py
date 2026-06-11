@@ -130,8 +130,10 @@ def _serialize(msg: object) -> dict:
 
 
 if __name__ == "__main__":
+    import os as _os
+    from sqlalchemy import create_engine as _ce
     from models import Base
-    from database import engine as default_engine
-    Base.metadata.create_all(default_engine)
-    _app = create_app()
+    _engine = _ce(_os.getenv("DATABASE_URL", "postgresql://localhost/realtime_hub"))
+    Base.metadata.create_all(_engine)
+    _app = create_app(engine=_engine)
     _app.socketio.run(_app, debug=True)
