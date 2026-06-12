@@ -19,6 +19,7 @@ env/
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # IDEs
 .vscode/
@@ -38,6 +39,8 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# Markdown — allow only README.md
+# Markdown — allow project docs, exclude personal study notes
 *.md
 !README.md
+!ARCHITECTURE.md
+!STUDY_GUIDE.md
