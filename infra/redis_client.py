@@ -1,7 +1,7 @@
 import json
 import os
 import redis
-from circuit_breaker import redis_breaker
+from infra.circuit_breaker import redis_breaker
 
 # Lazy attribute — tests replace this via monkeypatch before any command runs.
 _client = redis.Redis.from_url(

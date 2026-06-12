@@ -4,11 +4,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from models import Base, Message
-from users import create_user
-from channels import create_channel, join_channel
-from auth import make_token
-from app import create_app
-import redis_client
+from services.users import create_user
+from services.channels import create_channel, join_channel
+from api.auth import make_token
+from api.app import create_app
+from infra import redis_client
 
 
 # ------------------------------------------------------------------ redis mock
@@ -101,8 +101,6 @@ def other_auth_headers(app_other_user):
 
 
 # ------------------------------------------------------------------ app_message
-# Created directly (bypassing post_message) to avoid triggering job enqueueing
-# during test setup, which would attempt a real broker connection.
 
 @pytest.fixture
 def app_message(app_db, app_user, app_channel):
@@ -121,8 +119,7 @@ def app_message(app_db, app_user, app_channel):
 
 @pytest.fixture(autouse=True)
 def reset_circuit_breakers():
-    """Reset global circuit breakers before each test to prevent state leakage."""
-    from circuit_breaker import redis_breaker, db_breaker
+    from infra.circuit_breaker import redis_breaker, db_breaker
     redis_breaker.reset()
     db_breaker.reset()
     yield
@@ -132,8 +129,7 @@ def reset_circuit_breakers():
 
 @pytest.fixture
 def celery_eager():
-    """Run Celery tasks synchronously with retries; exceptions stored in result."""
-    from celery_app import celery
+    from jobs.celery_app import celery
     celery.conf.update(task_always_eager=True, task_eager_propagates=False)
     yield celery
     celery.conf.update(task_always_eager=False, task_eager_propagates=False)
@@ -141,8 +137,7 @@ def celery_eager():
 
 @pytest.fixture
 def task_db(flask_app, monkeypatch):
-    """Wire Celery tasks to the test database."""
-    import tasks as t
+    import jobs.tasks as t
     session = flask_app.SessionFactory()
     monkeypatch.setattr(t, "_session_factory", lambda: session)
     yield session

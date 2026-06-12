@@ -1,5 +1,5 @@
 import pytest
-from channels import (
+from services.channels import (
     create_channel,
     get_channel,
     join_channel,

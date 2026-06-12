@@ -5,7 +5,7 @@ celery = Celery(
     "realtime-hub",
     broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
     backend=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-    include=["tasks"],
+    include=["jobs.tasks"],
 )
 
 celery.conf.update(

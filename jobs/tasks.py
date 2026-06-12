@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from celery_app import celery
+from jobs.celery_app import celery
 from database import SessionLocal
 from models import Notification, Event
 
@@ -20,7 +20,7 @@ def send_notification(db, user_id: int, message_id: int) -> dict:
     ).first()
     if existing:
         try:
-            from monitoring import record_notification
+            from infra.monitoring import record_notification
             record_notification("skipped")
         except Exception:
             pass
@@ -30,7 +30,7 @@ def send_notification(db, user_id: int, message_id: int) -> dict:
     db.commit()
     db.refresh(n)
     try:
-        from monitoring import record_notification
+        from infra.monitoring import record_notification
         record_notification("success")
     except Exception:
         pass

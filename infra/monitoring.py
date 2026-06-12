@@ -2,13 +2,12 @@ import json
 import logging
 import threading
 from sqlalchemy import text
-import redis_client as rc
+from infra import redis_client as rc
 
 logger = logging.getLogger(__name__)
 
 
 # ---- Prometheus metrics -------------------------------------------------------
-# Imported lazily to avoid hard dependency when prometheus_client is absent.
 try:
     from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
@@ -25,12 +24,12 @@ try:
     notifications_created = Counter(
         "realtime_hub_notifications_total",
         "Total notifications processed",
-        ["status"],          # success | skipped
+        ["status"],
     )
     redis_publishes = Counter(
         "realtime_hub_redis_publishes_total",
         "Total Redis publish attempts",
-        ["status"],          # success | failure
+        ["status"],
     )
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
@@ -39,7 +38,7 @@ except ImportError:
     CONTENT_TYPE_LATEST = "text/plain"
 
 
-# ---- Metric helper functions (safe to call even if prometheus is absent) -----
+# ---- Metric helpers ----------------------------------------------------------
 
 def record_message_posted(channel_id: int, duration_seconds: float) -> None:
     if not _PROMETHEUS_AVAILABLE:
@@ -70,7 +69,6 @@ def record_redis_publish(success: bool) -> None:
 
 
 def get_prometheus_metrics() -> tuple[bytes, str]:
-    """Return (body, content_type) for the /metrics endpoint."""
     if not _PROMETHEUS_AVAILABLE or generate_latest is None:
         return b"# prometheus_client not installed\n", "text/plain"
     return generate_latest(), CONTENT_TYPE_LATEST
@@ -79,8 +77,6 @@ def get_prometheus_metrics() -> tuple[bytes, str]:
 # ---- Structured JSON logging -------------------------------------------------
 
 class JSONFormatter(logging.Formatter):
-    """Emit one JSON object per log record — easy for log aggregators to parse."""
-
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {
             "ts":     self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S"),
@@ -97,7 +93,6 @@ class JSONFormatter(logging.Formatter):
 
 
 def configure_logging(level: int = logging.INFO) -> None:
-    """Switch the root logger to structured JSON output."""
     handler = logging.StreamHandler()
     handler.setFormatter(JSONFormatter())
     root = logging.getLogger()
@@ -106,7 +101,7 @@ def configure_logging(level: int = logging.INFO) -> None:
     root.addHandler(handler)
 
 
-# ---- Individual service checks -----------------------------------------------
+# ---- Service checks ----------------------------------------------------------
 
 def check_database(db) -> dict:
     try:
@@ -126,7 +121,7 @@ def check_redis() -> dict:
 
 def check_job_queue() -> dict:
     try:
-        from celery_app import celery
+        from jobs.celery_app import celery
         _ = celery.conf.broker_url
         return {"status": "ok", "broker": celery.conf.broker_url}
     except Exception as exc:
@@ -134,14 +129,14 @@ def check_job_queue() -> dict:
 
 
 def check_circuit_breakers() -> dict:
-    from circuit_breaker import redis_breaker, db_breaker
+    from infra.circuit_breaker import redis_breaker, db_breaker
     return {
         "redis":    redis_breaker.as_dict(),
         "database": db_breaker.as_dict(),
     }
 
 
-# ---- Aggregate health status -------------------------------------------------
+# ---- Aggregate health --------------------------------------------------------
 
 def get_health_status(db) -> dict:
     db_check    = check_database(db)

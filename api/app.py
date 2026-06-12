@@ -4,19 +4,19 @@ from flask import Flask, jsonify, request, g, current_app, Response
 from flask_socketio import SocketIO
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-import messages as msg_service
-import channels as ch_service
-import redis_client as rc
-from auth import require_auth, make_token
-from websocket import register_handlers
-from error_handlers import register_error_handlers
-from monitoring import (
+from services import messages as msg_service
+from services import channels as ch_service
+from infra import redis_client as rc
+from api.auth import require_auth, make_token
+from api.websocket import register_handlers
+from api.error_handlers import register_error_handlers
+from infra.monitoring import (
     get_health_status,
     start_health_logging,
     get_prometheus_metrics,
     record_message_posted,
 )
-from circuit_breaker import redis_breaker, db_breaker
+from infra.circuit_breaker import redis_breaker, db_breaker
 
 
 def create_app(config: dict | None = None, engine=None):
@@ -69,7 +69,7 @@ def create_app(config: dict | None = None, engine=None):
     def register():
         body = request.get_json(silent=True) or {}
         try:
-            from users import create_user
+            from services.users import create_user
             user = create_user(
                 g.db,
                 body.get("username", ""),
@@ -192,13 +192,3 @@ def _serialize(msg: object) -> dict:
         "created_at": msg.created_at.isoformat() if msg.created_at else None,
         "updated_at": msg.updated_at.isoformat() if msg.updated_at else None,
     }
-
-
-if __name__ == "__main__":
-    import os as _os
-    from sqlalchemy import create_engine as _ce
-    from models import Base
-    _engine = _ce(_os.getenv("DATABASE_URL", "postgresql://localhost/realtime_hub"))
-    Base.metadata.create_all(_engine)
-    _app = create_app(engine=_engine)
-    _app.socketio.run(_app, host="0.0.0.0", port=5000, debug=False)

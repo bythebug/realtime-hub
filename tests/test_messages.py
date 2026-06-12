@@ -1,5 +1,5 @@
 import pytest
-from channels import join_channel
+from services.channels import join_channel
 
 
 # ------------------------------------------------------------------ post message
@@ -114,13 +114,11 @@ def test_delete_message(client, app_channel, auth_headers):
     resp = client.delete(f"/messages/{posted['id']}", headers=auth_headers)
     assert resp.status_code == 204
 
-    # soft-deleted: no longer visible
     fetch = client.get(f"/messages/{posted['id']}", headers=auth_headers)
     assert fetch.status_code == 404
 
 
 def test_unauthorized_delete(client, app_db, app_channel, app_other_user, auth_headers, other_auth_headers):
-    # other_user joins the channel so they can attempt the delete
     join_channel(app_db, app_other_user.id, app_channel.id)
 
     posted = client.post(

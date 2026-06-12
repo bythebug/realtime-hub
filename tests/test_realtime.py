@@ -1,10 +1,9 @@
 import pytest
-from auth import make_token
-from channels import join_channel
+from api.auth import make_token
+from services.channels import join_channel
 
 
 def _sio(flask_app, user_id):
-    """Create a connected Socket.IO test client for the given user."""
     return flask_app.socketio.test_client(
         flask_app, query_string=f"token={make_token(user_id)}"
     )
@@ -49,8 +48,8 @@ def test_user_join_notification(flask_app, app_user, app_channel):
 
 
 def test_join_non_member_channel_emits_error(flask_app, app_db, app_user):
-    from channels import create_channel
-    other_ch = create_channel(app_db, app_user.id, "private")  # user not joined
+    from services.channels import create_channel
+    other_ch = create_channel(app_db, app_user.id, "private")
 
     client = _sio(flask_app, app_user.id)
     client.emit("join", {"channel_id": other_ch.id})
@@ -66,7 +65,7 @@ def test_join_non_member_channel_emits_error(flask_app, app_db, app_user):
 def test_message_broadcast(flask_app, app_user, app_channel):
     client = _sio(flask_app, app_user.id)
     client.emit("join", {"channel_id": app_channel.id})
-    client.get_received()  # clear join events
+    client.get_received()
 
     client.emit("message", {"channel_id": app_channel.id, "content": "hello"})
 
@@ -102,7 +101,7 @@ def test_multiple_clients(flask_app, app_db, app_user, app_other_user, app_chann
     c1.emit("join", {"channel_id": app_channel.id})
     c2.emit("join", {"channel_id": app_channel.id})
     c1.get_received()
-    c2.get_received()  # clear join notifications
+    c2.get_received()
 
     c1.emit("message", {"channel_id": app_channel.id, "content": "broadcast test"})
 

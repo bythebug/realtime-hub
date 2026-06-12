@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from models import Message, UserChannel
-from channels import is_member
+from services.channels import is_member
 
 MAX_LENGTH = 5000
 
@@ -30,7 +30,7 @@ def _enqueue_member_notifications(
 ) -> None:
     """Fire-and-forget: notification failures must never fail the post."""
     try:
-        from job_queue import enqueue_job
+        from jobs.job_queue import enqueue_job
         members = db.query(UserChannel).filter(UserChannel.channel_id == channel_id).all()
         for m in members:
             if m.user_id != sender_id:

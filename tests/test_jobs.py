@@ -1,19 +1,16 @@
 import pytest
-import tasks as tasks_module
-from tasks import (
+import jobs.tasks as tasks_module
+from jobs.tasks import (
     send_notification,
     process_event,
     cleanup_old_notifications,
     send_notification_job,
 )
-from job_queue import enqueue_job, get_job_status, _CELERY_TO_JOB_STATE
+from jobs.job_queue import enqueue_job, get_job_status, _CELERY_TO_JOB_STATE
 from models import Notification, Event
 
 
-# ------------------------------------------------------------------ job queuing
-
 def test_job_queuing(celery_eager, task_db, app_user, app_message):
-    """enqueue_job runs eagerly in test mode and creates a notification."""
     job_id = enqueue_job("send_notification", app_user.id, app_message.id)
 
     assert isinstance(job_id, str) and len(job_id) > 0
@@ -25,10 +22,7 @@ def test_job_queuing(celery_eager, task_db, app_user, app_message):
     assert n is not None
 
 
-# ------------------------------------------------------------------ job execution (pure logic)
-
 def test_job_execution(task_db, app_user, app_message):
-    """send_notification() creates a Notification row."""
     result = send_notification(task_db, app_user.id, app_message.id)
 
     assert result["status"] == "success"
@@ -43,7 +37,6 @@ def test_job_execution(task_db, app_user, app_message):
 
 
 def test_job_execution_idempotent(task_db, app_user, app_message):
-    """Calling send_notification twice skips the second one (no duplicate)."""
     send_notification(task_db, app_user.id, app_message.id)
     result = send_notification(task_db, app_user.id, app_message.id)
 
@@ -55,10 +48,7 @@ def test_job_execution_idempotent(task_db, app_user, app_message):
     assert count == 1
 
 
-# ------------------------------------------------------------------ retry on failure
-
 def test_failed_job_retry(celery_eager, monkeypatch):
-    """Task retries up to max_retries (3) times then records FAILURE."""
     call_count = 0
 
     class FailingSession:
@@ -74,14 +64,10 @@ def test_failed_job_retry(celery_eager, monkeypatch):
     result = send_notification_job.delay(1, 999)
 
     assert result.state == "FAILURE"
-    # 1 initial attempt + 3 retries = 4 total DB calls
-    assert call_count == 4
+    assert call_count == 4  # 1 initial + 3 retries
 
-
-# ------------------------------------------------------------------ status tracking
 
 def test_job_status_tracking():
-    """_CELERY_TO_JOB_STATE maps all expected Celery states."""
     assert _CELERY_TO_JOB_STATE["SUCCESS"] == "success"
     assert _CELERY_TO_JOB_STATE["FAILURE"] == "failed"
     assert _CELERY_TO_JOB_STATE["STARTED"] == "processing"
@@ -91,12 +77,8 @@ def test_job_status_tracking():
 
 
 def test_get_job_status_success(celery_eager, task_db, app_user, app_message):
-    """EagerResult.state is SUCCESS after execution; get_job_status wraps it."""
-    from tasks import send_notification_job
+    from jobs.tasks import send_notification_job
 
-    # Call .delay() directly to get the EagerResult with the actual state.
-    # AsyncResult(job_id) can't find eager results without a persistent backend,
-    # so we verify get_job_status's structure and the raw EagerResult state.
     result = send_notification_job.delay(app_user.id, app_message.id)
     assert result.state == "SUCCESS"
 
@@ -106,11 +88,8 @@ def test_get_job_status_success(celery_eager, task_db, app_user, app_message):
     assert status["state"] in set(_CELERY_TO_JOB_STATE.values())
 
 
-# ------------------------------------------------------------------ concurrent jobs
-
 def test_concurrent_jobs(task_db, app_user, app_other_user, app_channel, app_message):
-    """Independent notification jobs for different users all succeed."""
-    from channels import join_channel
+    from services.channels import join_channel
     join_channel(task_db, app_other_user.id, app_channel.id)
 
     r1 = send_notification(task_db, app_user.id, app_message.id)
@@ -126,7 +105,6 @@ def test_concurrent_jobs(task_db, app_user, app_other_user, app_channel, app_mes
 
 
 def test_process_event_job(task_db, app_user):
-    """process_event() appends an Event row."""
     result = process_event(task_db, app_user.id, "user.login", {"ip": "127.0.0.1"})
 
     assert result["status"] == "success"
@@ -137,11 +115,9 @@ def test_process_event_job(task_db, app_user):
 
 
 def test_cleanup_old_notifications(task_db, app_user, app_message):
-    """cleanup_old_notifications() removes stale read notifications."""
     from datetime import datetime, timedelta, timezone
     from models import Notification
 
-    # Create a read notification with an old timestamp
     old = Notification(
         user_id=app_user.id,
         message_id=app_message.id,

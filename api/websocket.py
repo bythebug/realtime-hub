@@ -2,9 +2,9 @@ import os
 import jwt
 from flask import request
 from flask_socketio import join_room, leave_room, emit
-from channels import is_member
-from messages import post_message
-import redis_client as rc
+from services.channels import is_member
+from services.messages import post_message
+from infra import redis_client as rc
 
 
 def register_handlers(socketio, session_factory):
@@ -13,7 +13,6 @@ def register_handlers(socketio, session_factory):
     session_factory is called to create a new DB session for each handler
     because Flask's g/before_request lifecycle does not fire for socket events.
     """
-    # sid → user_id for connected sockets
     _connected: dict[str, int] = {}
 
     def _current_user() -> int | None:
@@ -22,13 +21,11 @@ def register_handlers(socketio, session_factory):
     def _secret() -> str:
         return os.getenv("SECRET_KEY", "dev-secret-key")
 
-    # ------------------------------------------------------------------
-
     @socketio.on("connect")
     def on_connect(auth):
         token = request.args.get("token", "") or (auth or {}).get("token", "")
         if not token:
-            return False  # reject connection
+            return False
         try:
             payload = jwt.decode(token, _secret(), algorithms=["HS256"])
             _connected[request.sid] = payload["user_id"]
