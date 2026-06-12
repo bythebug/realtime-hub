@@ -19,11 +19,21 @@ def send_notification(db, user_id: int, message_id: int) -> dict:
         Notification.message_id == message_id,
     ).first()
     if existing:
+        try:
+            from monitoring import record_notification
+            record_notification("skipped")
+        except Exception:
+            pass
         return {"status": "skipped", "reason": "already exists"}
     n = Notification(user_id=user_id, message_id=message_id)
     db.add(n)
     db.commit()
     db.refresh(n)
+    try:
+        from monitoring import record_notification
+        record_notification("success")
+    except Exception:
+        pass
     return {"status": "success", "notification_id": n.id}
 
 

@@ -1,3 +1,4 @@
+import json
 import logging
 import threading
 from sqlalchemy import text
@@ -6,7 +7,106 @@ import redis_client as rc
 logger = logging.getLogger(__name__)
 
 
-# ---- Individual service checks ----
+# ---- Prometheus metrics -------------------------------------------------------
+# Imported lazily to avoid hard dependency when prometheus_client is absent.
+try:
+    from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+
+    messages_posted = Counter(
+        "realtime_hub_messages_total",
+        "Total messages posted",
+        ["channel_id"],
+    )
+    message_post_latency = Histogram(
+        "realtime_hub_message_post_duration_seconds",
+        "End-to-end time to post a message (DB save + broadcast)",
+        buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+    )
+    notifications_created = Counter(
+        "realtime_hub_notifications_total",
+        "Total notifications processed",
+        ["status"],          # success | skipped
+    )
+    redis_publishes = Counter(
+        "realtime_hub_redis_publishes_total",
+        "Total Redis publish attempts",
+        ["status"],          # success | failure
+    )
+    _PROMETHEUS_AVAILABLE = True
+except ImportError:
+    _PROMETHEUS_AVAILABLE = False
+    generate_latest = None
+    CONTENT_TYPE_LATEST = "text/plain"
+
+
+# ---- Metric helper functions (safe to call even if prometheus is absent) -----
+
+def record_message_posted(channel_id: int, duration_seconds: float) -> None:
+    if not _PROMETHEUS_AVAILABLE:
+        return
+    try:
+        messages_posted.labels(channel_id=str(channel_id)).inc()
+        message_post_latency.observe(duration_seconds)
+    except Exception:
+        pass
+
+
+def record_notification(status: str) -> None:
+    if not _PROMETHEUS_AVAILABLE:
+        return
+    try:
+        notifications_created.labels(status=status).inc()
+    except Exception:
+        pass
+
+
+def record_redis_publish(success: bool) -> None:
+    if not _PROMETHEUS_AVAILABLE:
+        return
+    try:
+        redis_publishes.labels(status="success" if success else "failure").inc()
+    except Exception:
+        pass
+
+
+def get_prometheus_metrics() -> tuple[bytes, str]:
+    """Return (body, content_type) for the /metrics endpoint."""
+    if not _PROMETHEUS_AVAILABLE or generate_latest is None:
+        return b"# prometheus_client not installed\n", "text/plain"
+    return generate_latest(), CONTENT_TYPE_LATEST
+
+
+# ---- Structured JSON logging -------------------------------------------------
+
+class JSONFormatter(logging.Formatter):
+    """Emit one JSON object per log record — easy for log aggregators to parse."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict = {
+            "ts":     self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S"),
+            "level":  record.levelname,
+            "logger": record.name,
+            "msg":    record.getMessage(),
+            "module": record.module,
+            "fn":     record.funcName,
+            "line":   record.lineno,
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload)
+
+
+def configure_logging(level: int = logging.INFO) -> None:
+    """Switch the root logger to structured JSON output."""
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONFormatter())
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
+    root.addHandler(handler)
+
+
+# ---- Individual service checks -----------------------------------------------
 
 def check_database(db) -> dict:
     try:
@@ -41,15 +141,13 @@ def check_circuit_breakers() -> dict:
     }
 
 
-# ---- Aggregate health status ----
+# ---- Aggregate health status -------------------------------------------------
 
 def get_health_status(db) -> dict:
     db_check    = check_database(db)
     redis_check = check_redis()
     queue_check = check_job_queue()
 
-    # System is degraded (but still serving) unless every service is ok.
-    # Database down is the only hard dependency — all others degrade gracefully.
     overall = "ok" if all(
         s["status"] == "ok" for s in [db_check, redis_check, queue_check]
     ) else "degraded"
@@ -64,14 +162,13 @@ def get_health_status(db) -> dict:
     }
 
 
-# ---- Background health logger ----
+# ---- Background health logger ------------------------------------------------
 
 _stop_event = threading.Event()
 _health_thread: threading.Thread | None = None
 
 
 def start_health_logging(app, interval: int = 60) -> None:
-    """Log system health every `interval` seconds in a background daemon thread."""
     global _health_thread
     _stop_event.clear()
 

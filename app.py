@@ -1,15 +1,21 @@
 import os
-from flask import Flask, jsonify, request, g, current_app
+import time
+from flask import Flask, jsonify, request, g, current_app, Response
 from flask_socketio import SocketIO
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import messages as msg_service
 import channels as ch_service
 import redis_client as rc
-from auth import require_auth
+from auth import require_auth, make_token
 from websocket import register_handlers
 from error_handlers import register_error_handlers
-from monitoring import get_health_status, start_health_logging
+from monitoring import (
+    get_health_status,
+    start_health_logging,
+    get_prometheus_metrics,
+    record_message_posted,
+)
 from circuit_breaker import redis_breaker, db_breaker
 
 
@@ -57,28 +63,45 @@ def create_app(config: dict | None = None, engine=None):
                 db.rollback()
             db.close()
 
-    # ------------------------------------------------------------------ health
+    # ------------------------------------------------------------------ auth
 
-    @app.get("/health")
-    def health():
-        status = get_health_status(g.db)
-        # Return 503 only when the database is down — the app cannot serve requests.
-        # Redis / job-queue failures degrade gracefully, so we still return 200.
-        http_code = 503 if status["services"]["database"]["status"] != "ok" else 200
-        return jsonify(status), http_code
+    @app.post("/auth/register")
+    def register():
+        body = request.get_json(silent=True) or {}
+        try:
+            from users import create_user
+            user = create_user(
+                g.db,
+                body.get("username", ""),
+                body.get("email", ""),
+                body.get("password", ""),
+            )
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"token": make_token(user.id), "user_id": user.id}), 201
 
-    @app.get("/health/circuit-breakers")
-    def health_circuit_breakers():
-        return jsonify({
-            "redis":    redis_breaker.as_dict(),
-            "database": db_breaker.as_dict(),
-        })
+    # ------------------------------------------------------------------ channels
 
-    # ------------------------------------------------------------------ routes
+    @app.post("/channels")
+    @require_auth
+    def create_channel():
+        body = request.get_json(silent=True) or {}
+        name = body.get("name", "").strip()
+        if not name:
+            return jsonify({"error": "name required"}), 422
+        try:
+            ch = ch_service.create_channel(g.db, g.current_user_id, name)
+            ch_service.join_channel(g.db, g.current_user_id, ch.id)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"id": ch.id, "name": ch.name}), 201
+
+    # ------------------------------------------------------------------ messages
 
     @app.post("/channels/<int:channel_id>/messages")
     @require_auth
     def post_message(channel_id):
+        start = time.perf_counter()
         body = request.get_json(silent=True) or {}
         try:
             msg = msg_service.post_message(g.db, g.current_user_id, channel_id, body.get("content", ""))
@@ -88,6 +111,7 @@ def create_app(config: dict | None = None, engine=None):
             return jsonify({"error": str(e)}), 403
 
         serialized = _serialize(msg)
+        record_message_posted(channel_id, time.perf_counter() - start)
 
         try:
             current_app.socketio.emit("new_message", serialized, room=f"channel:{channel_id}")
@@ -133,7 +157,26 @@ def create_app(config: dict | None = None, engine=None):
             return jsonify({"error": str(e)}), 403
         return "", 204
 
-    # Start background health logging in production only
+    # ------------------------------------------------------------------ observability
+
+    @app.get("/health")
+    def health():
+        status = get_health_status(g.db)
+        http_code = 503 if status["services"]["database"]["status"] != "ok" else 200
+        return jsonify(status), http_code
+
+    @app.get("/health/circuit-breakers")
+    def health_circuit_breakers():
+        return jsonify({
+            "redis":    redis_breaker.as_dict(),
+            "database": db_breaker.as_dict(),
+        })
+
+    @app.get("/metrics")
+    def metrics():
+        body, content_type = get_prometheus_metrics()
+        return Response(body, status=200, mimetype=content_type)
+
     if not app.config.get("TESTING"):
         start_health_logging(app)
 
@@ -158,4 +201,4 @@ if __name__ == "__main__":
     _engine = _ce(_os.getenv("DATABASE_URL", "postgresql://localhost/realtime_hub"))
     Base.metadata.create_all(_engine)
     _app = create_app(engine=_engine)
-    _app.socketio.run(_app, debug=True)
+    _app.socketio.run(_app, host="0.0.0.0", port=5000, debug=False)
