@@ -16,10 +16,17 @@ app = create_app(engine=engine)
 
 
 def _init_db():
+    from database import SessionLocal
+    from seed import seed
     for attempt in range(30):
         try:
             Base.metadata.create_all(engine)
             app.logger.info("Database tables ready")
+            db = SessionLocal()
+            try:
+                seed(db)
+            finally:
+                db.close()
             return
         except Exception as exc:
             if attempt == 29:
