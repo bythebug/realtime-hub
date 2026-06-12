@@ -1,11 +1,11 @@
 # realtime-hub
 
-A production-grade real-time notification system built with Flask, Socket.IO, Redis, Celery, and PostgreSQL.
+A real-time messaging app built with Flask, Socket.IO, Redis, Celery, and PostgreSQL — with a React frontend.
 
 ## Architecture
 
 ```
-Client (Browser / Mobile / API)
+Client (Browser)
         │
         ├── HTTP/REST ────────────────────────────────────┐
         └── WebSocket (Socket.IO) ───────────────────┐    │
@@ -41,6 +41,7 @@ Client (Browser / Mobile / API)
 | Real-time | Socket.IO, Redis pub/sub |
 | Database | PostgreSQL (SQLAlchemy ORM) |
 | Job queue | Celery 5 + Redis broker |
+| Frontend | React 18, Vite |
 | Resilience | Circuit breaker, retry with backoff |
 | Observability | Prometheus metrics, structured JSON logging |
 | Testing | pytest (67 tests: unit, integration, resilience) |
@@ -50,20 +51,24 @@ Client (Browser / Mobile / API)
 
 ## Quick Start (Docker)
 
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
 ```bash
-# Clone and start everything
 git clone https://github.com/bythebug/realtime-hub.git
 cd realtime-hub
-
-cp .env.example .env          # fill in secrets
-docker-compose up --build
+docker compose up --build
 ```
 
 Services:
-- App: http://localhost:5000
-- Prometheus: http://localhost:9090
-- PostgreSQL: localhost:5432
-- Redis: localhost:6379
+
+| Service | URL |
+|---|---|
+| App | http://localhost:5001 |
+| Prometheus | http://localhost:9090 |
+| PostgreSQL | localhost:5432 |
+| Redis | localhost:6379 |
+
+> **Note:** Port 5001 is used for the app because macOS reserves 5000 for AirPlay Receiver.
 
 ---
 
@@ -74,7 +79,7 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
 # Start dependencies
-docker-compose up db redis -d
+docker compose up db redis -d
 
 # Set env vars
 export DATABASE_URL=postgresql://hub:hub@localhost:5432/realtime_hub
@@ -86,45 +91,92 @@ python run.py
 
 # Run the Celery worker (separate terminal)
 celery -A jobs.celery_app worker --loglevel=info
-
-# Run tests
-pytest tests/
 ```
+
+---
+
+## Demo Account
+
+A demo account is pre-seeded when you run locally:
+
+| Field | Value |
+|---|---|
+| Email | `demo@realtimehub.app` |
+| Password | `demo1234` |
+
+To create it, hit the register endpoint once after the stack is up:
+
+```bash
+curl -s -X POST http://localhost:5001/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username": "demo", "email": "demo@realtimehub.app", "password": "demo1234"}'
+```
+
+---
+
+## Frontend
+
+The React frontend is served by the Flask app at `/` in production (built into `frontend/dist` during the Docker build). In development, run the Vite dev server separately:
+
+```bash
+cd frontend
+npm install
+npm run dev       # http://localhost:5173
+```
+
+**Features:**
+- Register / sign in
+- Create channels, join/leave channels
+- Real-time messaging via WebSocket
+- Message history with pagination (load earlier messages)
+- Delete your own messages
+- Live health indicator
 
 ---
 
 ## API Reference
 
+All protected endpoints require `Authorization: Bearer <token>`.
+
 ### Auth
 
 | Method | Endpoint | Auth | Body | Description |
 |--------|----------|------|------|-------------|
-| `POST` | `/auth/register` | — | `{username, email, password}` | Register + get JWT |
+| `POST` | `/auth/register` | — | `{username, email, password}` | Register and receive JWT |
+| `POST` | `/auth/login` | — | `{email, password}` | Login and receive JWT |
+
+### Users
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/users/{id}` | ✓ | Get a user's public profile (`id`, `username`) |
 
 ### Channels
 
 | Method | Endpoint | Auth | Body | Description |
 |--------|----------|------|------|-------------|
-| `POST` | `/channels` | ✓ | `{name}` | Create channel (auto-joins creator) |
+| `GET` | `/channels` | ✓ | — | List all channels |
+| `GET` | `/channels/me` | ✓ | — | List channels you've joined |
+| `POST` | `/channels` | ✓ | `{name}` | Create a channel (auto-joins creator) |
+| `POST` | `/channels/{id}/join` | ✓ | — | Join a channel |
+| `DELETE` | `/channels/{id}/leave` | ✓ | — | Leave a channel |
 
 ### Messages
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | `POST` | `/channels/{id}/messages` | ✓ | Post a message |
-| `GET`  | `/channels/{id}/messages` | ✓ | Fetch message history (paginated) |
-| `GET`  | `/messages/{id}` | ✓ | Fetch a single message |
-| `DELETE` | `/messages/{id}` | ✓ | Soft-delete a message (author only) |
+| `GET` | `/channels/{id}/messages` | ✓ | Fetch message history (paginated) |
+| `GET` | `/messages/{id}` | ✓ | Fetch a single message |
+| `DELETE` | `/messages/{id}` | ✓ | Delete a message (author only) |
 
 **Query params for GET messages:**
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `limit` | `50` | Max messages (capped at 100) |
+| `limit` | `50` | Max messages returned (capped at 100) |
 | `offset` | `0` | Pagination offset |
 | `order` | `asc` | `asc` (oldest first) or `desc` (newest first) |
-
-**Auth header:** `Authorization: Bearer <token>`
 
 ### Observability
 
@@ -155,19 +207,7 @@ Connect with `?token=<jwt>` query parameter.
 | `new_message` | `{id, channel_id, user_id, content, created_at}` | New message in joined channel |
 | `user_joined` | `{user_id, channel_id}` | User joined the channel |
 | `user_left` | `{user_id, channel_id}` | User left the channel |
-| `error` | `{message}` | Error (e.g. not a member) |
-
----
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in values:
-
-```bash
-cp .env.example .env
-```
-
-See [.env.example](.env.example) for all required variables.
+| `error` | `{message}` | Error (e.g. not a channel member) |
 
 ---
 
@@ -186,13 +226,12 @@ pytest tests/test_resilience.py
 pytest tests/test_integration.py
 ```
 
-**Test counts:** 67 tests across 6 suites (unit, integration, resilience).
+67 tests across 6 suites (unit, integration, resilience).
 
 ### Load Testing
 
 ```bash
-# Start the app first, then:
-locust -f load_test.py --headless -u 100 -r 10 -t 60s --host http://localhost:5000
+locust -f load_test.py --headless -u 100 -r 10 -t 60s --host http://localhost:5001
 ```
 
 ---
@@ -210,7 +249,7 @@ export ECS_SERVICE=realtime-hub-service
 ./deploy.sh
 ```
 
-For detailed system design and scaling decisions, see [ARCHITECTURE.md](ARCHITECTURE.md).
+For system design and scaling decisions, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
@@ -243,6 +282,12 @@ realtime-hub/
 │   ├── redis_client.py
 │   ├── circuit_breaker.py
 │   └── monitoring.py
+│
+├── frontend/          # React + Vite frontend
+│   └── src/
+│       ├── components/
+│       ├── api.js
+│       └── socket.js
 │
 ├── tests/             # 67 tests
 ├── docker-compose.yml

@@ -1,7 +1,9 @@
 import os
 import time
-from flask import Flask, jsonify, request, g, current_app, Response
+from flask import Flask, jsonify, request, g, current_app, Response, send_from_directory
 from flask_socketio import SocketIO
+
+_FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from services import messages as msg_service
@@ -43,7 +45,7 @@ def create_app(config: dict | None = None, engine=None):
         app,
         message_queue=redis_url or None,
         cors_allowed_origins="*",
-        async_mode="threading",
+        async_mode="gevent",
     )
     app.socketio = socketio
     register_handlers(socketio, app.SessionFactory)
@@ -78,9 +80,63 @@ def create_app(config: dict | None = None, engine=None):
             )
         except Exception as e:
             return jsonify({"error": str(e)}), 400
-        return jsonify({"token": make_token(user.id), "user_id": user.id}), 201
+        return jsonify({"token": make_token(user.id), "user_id": user.id, "username": user.username}), 201
+
+    @app.post("/auth/login")
+    def login():
+        body = request.get_json(silent=True) or {}
+        from services.users import get_user_by_email, verify_password
+        user = get_user_by_email(g.db, body.get("email", ""))
+        if not user or not verify_password(body.get("password", ""), user.password_hash):
+            return jsonify({"error": "invalid credentials"}), 401
+        return jsonify({"token": make_token(user.id), "user_id": user.id, "username": user.username})
+
+    # ------------------------------------------------------------------ users
+
+    @app.get("/users/<int:user_id>")
+    @require_auth
+    def get_user_profile(user_id):
+        from services.users import get_user
+        user = get_user(g.db, user_id)
+        if not user:
+            return jsonify({"error": "user not found"}), 404
+        return jsonify({"id": user.id, "username": user.username})
 
     # ------------------------------------------------------------------ channels
+
+    @app.get("/channels")
+    @require_auth
+    def list_all_channels():
+        from models import Channel
+        channels = g.db.query(Channel).order_by(Channel.name).all()
+        return jsonify([{"id": c.id, "name": c.name, "creator_id": c.creator_id} for c in channels])
+
+    @app.get("/channels/me")
+    @require_auth
+    def list_my_channels():
+        channels = ch_service.list_user_channels(g.db, g.current_user_id)
+        return jsonify([{"id": c.id, "name": c.name, "creator_id": c.creator_id} for c in channels])
+
+    @app.post("/channels/<int:channel_id>/join")
+    @require_auth
+    def join_channel_route(channel_id):
+        try:
+            ch_service.join_channel(g.db, g.current_user_id, channel_id)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        ch = ch_service.get_channel(g.db, channel_id)
+        if not ch:
+            return jsonify({"error": "channel not found"}), 404
+        return jsonify({"id": ch.id, "name": ch.name})
+
+    @app.delete("/channels/<int:channel_id>/leave")
+    @require_auth
+    def leave_channel_route(channel_id):
+        try:
+            ch_service.leave_channel(g.db, g.current_user_id, channel_id)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 404
+        return "", 204
 
     @app.post("/channels")
     @require_auth
@@ -176,6 +232,19 @@ def create_app(config: dict | None = None, engine=None):
     def metrics():
         body, content_type = get_prometheus_metrics()
         return Response(body, status=200, mimetype=content_type)
+
+    # ------------------------------------------------------------------ frontend (production)
+
+    frontend_dist = os.path.realpath(_FRONTEND_DIST)
+
+    if os.path.isdir(frontend_dist):
+        @app.route("/", defaults={"path": ""})
+        @app.route("/<path:path>")
+        def serve_frontend(path):
+            full = os.path.join(frontend_dist, path)
+            if path and os.path.isfile(full):
+                return send_from_directory(frontend_dist, path)
+            return send_from_directory(frontend_dist, "index.html")
 
     if not app.config.get("TESTING"):
         start_health_logging(app)

@@ -4,7 +4,7 @@ services:
   app:
     build: .
     ports:
-      - "5000:5000"
+      - "5001:5000"
     environment:
       DATABASE_URL: postgresql://hub:hub@db:5432/realtime_hub
       REDIS_URL: redis://redis:6379/0
