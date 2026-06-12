@@ -22,4 +22,4 @@ COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--worker-class", "gevent", "--workers", "1", "--worker-connections", "1000", "--bind", "0.0.0.0:5000", "--timeout", "120", "wsgi:app"]
+CMD gunicorn --worker-class gevent --workers 1 --worker-connections 1000 --bind 0.0.0.0:${PORT:-5000} --timeout 120 wsgi:app
