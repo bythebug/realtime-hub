@@ -97,12 +97,16 @@ celery -A jobs.celery_app worker --loglevel=info
 
 ## Demo Account
 
-A demo account can be created after the stack is up:
+On first startup, demo data is seeded automatically — no extra steps needed. The stack creates 4 users and 4 channels (`#general`, `#engineering`, `#random`, `#announcements`) with sample conversations.
+
+Default demo account:
 
 | Field | Value |
 |---|---|
 | Email | `demo@realtimehub.app` |
 | Password | `demo1234` |
+
+If starting fresh (empty DB), you can also create the demo account manually:
 
 ```bash
 curl -s -X POST http://localhost:5001/auth/register \
