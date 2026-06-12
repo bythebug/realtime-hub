@@ -28,7 +28,9 @@ def register_handlers(socketio, session_factory):
             return False
         try:
             payload = jwt.decode(token, _secret(), algorithms=["HS256"])
-            _connected[request.sid] = payload["user_id"]
+            user_id = payload["user_id"]
+            _connected[request.sid] = user_id
+            join_room(f"user:{user_id}")
         except jwt.InvalidTokenError:
             return False
 

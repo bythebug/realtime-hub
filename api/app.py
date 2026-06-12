@@ -67,6 +67,13 @@ def create_app(config: dict | None = None, engine=None):
 
     # ------------------------------------------------------------------ auth
 
+    def _log_event(user_id, action, data):
+        try:
+            from jobs.job_queue import enqueue_job
+            enqueue_job("process_event", user_id, action, data)
+        except Exception:
+            pass
+
     @app.post("/auth/register")
     def register():
         body = request.get_json(silent=True) or {}
@@ -80,6 +87,7 @@ def create_app(config: dict | None = None, engine=None):
             )
         except Exception as e:
             return jsonify({"error": str(e)}), 400
+        _log_event(user.id, "user.registered", {"username": user.username})
         return jsonify({"token": make_token(user.id), "user_id": user.id, "username": user.username}), 201
 
     @app.post("/auth/login")
@@ -89,6 +97,7 @@ def create_app(config: dict | None = None, engine=None):
         user = get_user_by_email(g.db, body.get("email", ""))
         if not user or not verify_password(body.get("password", ""), user.password_hash):
             return jsonify({"error": "invalid credentials"}), 401
+        _log_event(user.id, "user.login", {})
         return jsonify({"token": make_token(user.id), "user_id": user.id, "username": user.username})
 
     # ------------------------------------------------------------------ users
@@ -127,7 +136,20 @@ def create_app(config: dict | None = None, engine=None):
         ch = ch_service.get_channel(g.db, channel_id)
         if not ch:
             return jsonify({"error": "channel not found"}), 404
+        _log_event(g.current_user_id, "channel.joined", {"channel_id": channel_id})
         return jsonify({"id": ch.id, "name": ch.name})
+
+    @app.delete("/channels/<int:channel_id>")
+    @require_auth
+    def delete_channel_route(channel_id):
+        try:
+            ch_service.delete_channel(g.db, channel_id, g.current_user_id)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 404
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        _log_event(g.current_user_id, "channel.deleted", {"channel_id": channel_id})
+        return "", 204
 
     @app.delete("/channels/<int:channel_id>/leave")
     @require_auth
@@ -136,6 +158,7 @@ def create_app(config: dict | None = None, engine=None):
             ch_service.leave_channel(g.db, g.current_user_id, channel_id)
         except ValueError as e:
             return jsonify({"error": str(e)}), 404
+        _log_event(g.current_user_id, "channel.left", {"channel_id": channel_id})
         return "", 204
 
     @app.post("/channels")
@@ -168,6 +191,7 @@ def create_app(config: dict | None = None, engine=None):
 
         serialized = _serialize(msg)
         record_message_posted(channel_id, time.perf_counter() - start)
+        _log_event(g.current_user_id, "message.posted", {"channel_id": channel_id, "message_id": serialized["id"]})
 
         try:
             current_app.socketio.emit("new_message", serialized, room=f"channel:{channel_id}")
@@ -212,6 +236,49 @@ def create_app(config: dict | None = None, engine=None):
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
         return "", 204
+
+    # ------------------------------------------------------------------ notifications
+
+    @app.get("/notifications")
+    @require_auth
+    def get_notifications():
+        from models import Notification, Message
+        notifs = (
+            g.db.query(Notification)
+            .filter(
+                Notification.user_id == g.current_user_id,
+                Notification.is_read == False,  # noqa: E712
+            )
+            .order_by(Notification.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        result = []
+        for n in notifs:
+            msg = g.db.get(Message, n.message_id) if n.message_id else None
+            result.append({
+                "id": n.id,
+                "message_id": n.message_id,
+                "channel_id": msg.channel_id if msg else None,
+                "is_read": n.is_read,
+                "created_at": n.created_at.isoformat(),
+            })
+        return jsonify(result)
+
+    @app.post("/notifications/read-all")
+    @require_auth
+    def mark_all_notifications_read():
+        from models import Notification
+        updated = (
+            g.db.query(Notification)
+            .filter(
+                Notification.user_id == g.current_user_id,
+                Notification.is_read == False,  # noqa: E712
+            )
+            .update({"is_read": True})
+        )
+        g.db.commit()
+        return jsonify({"marked_read": updated})
 
     # ------------------------------------------------------------------ observability
 

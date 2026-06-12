@@ -35,6 +35,9 @@ export const joinChannel = (token, channelId) =>
 export const leaveChannel = (token, channelId) =>
   req('DELETE', `/channels/${channelId}/leave`, null, token)
 
+export const deleteChannel = (token, channelId) =>
+  req('DELETE', `/channels/${channelId}`, null, token)
+
 export const getMessages = (token, channelId, { limit = 50, offset = 0 } = {}) =>
   req('GET', `/channels/${channelId}/messages?limit=${limit}&offset=${offset}&order=desc`, null, token)
 
@@ -43,6 +46,12 @@ export const deleteMessage = (token, messageId) =>
 
 export const getUser = (token, userId) =>
   req('GET', `/users/${userId}`, null, token)
+
+export const getNotifications = (token) =>
+  req('GET', '/notifications', null, token)
+
+export const markAllNotificationsRead = (token) =>
+  req('POST', '/notifications/read-all', {}, token)
 
 export const getHealth = () =>
   fetch(BASE + '/health').then((r) => r.json()).catch(() => ({ status: 'unknown' }))

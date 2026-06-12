@@ -1,6 +1,6 @@
 # realtime-hub
 
-A real-time messaging app built with Flask, Socket.IO, Redis, Celery, and PostgreSQL — with a React frontend.
+A real-time event system built with Flask, Socket.IO, Redis, Celery, and PostgreSQL. Events are published, fanned out via Redis pub/sub, and delivered to connected clients over WebSocket — with a React frontend as the demo interface.
 
 ## Architecture
 
@@ -97,14 +97,12 @@ celery -A jobs.celery_app worker --loglevel=info
 
 ## Demo Account
 
-A demo account is pre-seeded when you run locally:
+A demo account can be created after the stack is up:
 
 | Field | Value |
 |---|---|
 | Email | `demo@realtimehub.app` |
 | Password | `demo1234` |
-
-To create it, hit the register endpoint once after the stack is up:
 
 ```bash
 curl -s -X POST http://localhost:5001/auth/register \
@@ -128,8 +126,11 @@ npm run dev       # http://localhost:5173
 - Register / sign in
 - Create channels, join/leave channels
 - Real-time messaging via WebSocket
+- Usernames resolved and cached client-side
 - Message history with pagination (load earlier messages)
-- Delete your own messages
+- Delete your own messages (hover to reveal)
+- Notification bell with unread count — live updates via WebSocket, click to navigate to channel
+- Delete channel (creator only, with confirmation)
 - Live health indicator
 
 ---
@@ -160,6 +161,7 @@ All protected endpoints require `Authorization: Bearer <token>`.
 | `POST` | `/channels` | ✓ | `{name}` | Create a channel (auto-joins creator) |
 | `POST` | `/channels/{id}/join` | ✓ | — | Join a channel |
 | `DELETE` | `/channels/{id}/leave` | ✓ | — | Leave a channel |
+| `DELETE` | `/channels/{id}` | ✓ | — | Delete a channel (creator only) |
 
 ### Messages
 
@@ -176,7 +178,16 @@ All protected endpoints require `Authorization: Bearer <token>`.
 |-------|---------|-------------|
 | `limit` | `50` | Max messages returned (capped at 100) |
 | `offset` | `0` | Pagination offset |
-| `order` | `asc` | `asc` (oldest first) or `desc` (newest first) |
+| `order` | `desc` | `asc` (oldest first) or `desc` (newest first) |
+
+### Notifications
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/notifications` | ✓ | Fetch unread notifications (newest 50) |
+| `POST` | `/notifications/read-all` | ✓ | Mark all unread notifications as read |
+
+Each notification includes `message_id` and `channel_id` for client-side navigation.
 
 ### Observability
 
@@ -190,7 +201,9 @@ All protected endpoints require `Authorization: Bearer <token>`.
 
 ## WebSocket Events
 
-Connect with `?token=<jwt>` query parameter.
+Connect with `?token=<jwt>` or pass token in the `auth` object.
+
+On connect, the client is automatically joined to a personal `user:{id}` room for direct notifications.
 
 ### Client → Server
 
@@ -207,7 +220,25 @@ Connect with `?token=<jwt>` query parameter.
 | `new_message` | `{id, channel_id, user_id, content, created_at}` | New message in joined channel |
 | `user_joined` | `{user_id, channel_id}` | User joined the channel |
 | `user_left` | `{user_id, channel_id}` | User left the channel |
+| `notification` | `{notification_id, message_id}` | New notification for this user (personal room) |
 | `error` | `{message}` | Error (e.g. not a channel member) |
+
+---
+
+## Event Audit Log
+
+Key user actions are recorded asynchronously to the `events` table via Celery:
+
+| Action | Trigger |
+|---|---|
+| `user.registered` | POST /auth/register |
+| `user.login` | POST /auth/login |
+| `message.posted` | POST /channels/:id/messages |
+| `channel.joined` | POST /channels/:id/join |
+| `channel.left` | DELETE /channels/:id/leave |
+| `channel.deleted` | DELETE /channels/:id |
+
+All event logging is fire-and-forget — a logging failure never affects the HTTP response.
 
 ---
 
@@ -257,39 +288,40 @@ For system design and scaling decisions, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ```
 realtime-hub/
-├── models.py          # SQLAlchemy models
-├── database.py        # DB engine / session factory
-├── schema.sql         # DDL with indexes
-├── run.py             # App entry point
+├── models.py              # SQLAlchemy models
+├── database.py            # DB engine / session factory
+├── schema.sql             # DDL with indexes
+├── run.py                 # App entry point
 │
-├── api/               # Flask app, routes, auth, WebSocket
+├── api/                   # Flask app, routes, auth, WebSocket
 │   ├── app.py
 │   ├── auth.py
 │   ├── error_handlers.py
 │   └── websocket.py
 │
-├── services/          # Business logic (no Flask/Celery dependency)
+├── services/              # Business logic (no Flask/Celery dependency)
 │   ├── channels.py
 │   ├── messages.py
 │   └── users.py
 │
-├── jobs/              # Async task processing
+├── jobs/                  # Async task processing
 │   ├── celery_app.py
 │   ├── tasks.py
 │   └── job_queue.py
 │
-├── infra/             # External service wrappers
+├── infra/                 # External service wrappers
 │   ├── redis_client.py
 │   ├── circuit_breaker.py
 │   └── monitoring.py
 │
-├── frontend/          # React + Vite frontend
+├── frontend/              # React + Vite frontend
 │   └── src/
 │       ├── components/
 │       ├── api.js
 │       └── socket.js
 │
-├── tests/             # 67 tests
+├── tests/                 # 67 tests
+├── ARCHITECTURE.md        # System design and scaling decisions
 ├── docker-compose.yml
 ├── Dockerfile
 ├── prometheus.yml

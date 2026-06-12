@@ -45,6 +45,16 @@ def leave_channel(db: Session, user_id: int, channel_id: int) -> None:
     db.commit()
 
 
+def delete_channel(db: Session, channel_id: int, user_id: int) -> None:
+    channel = db.get(Channel, channel_id)
+    if not channel:
+        raise ValueError("channel not found")
+    if channel.creator_id != user_id:
+        raise PermissionError("only the channel creator can delete this channel")
+    db.delete(channel)
+    db.commit()
+
+
 def is_member(db: Session, user_id: int, channel_id: int) -> bool:
     return (
         db.query(UserChannel)

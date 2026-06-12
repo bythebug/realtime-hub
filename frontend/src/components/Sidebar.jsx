@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getAllChannels, getMyChannels, createChannel, joinChannel, leaveChannel } from '../api'
+import { getAllChannels, getMyChannels, createChannel, joinChannel, leaveChannel, deleteChannel } from '../api'
 
 const s = {
   root: {
@@ -25,6 +25,11 @@ const s = {
     padding: '1px 6px', background: 'rgba(214,54,56,0.1)', color: 'var(--danger)',
     fontSize: 12, borderRadius: 4, lineHeight: 1.4,
   },
+  deleteBtn: {
+    padding: '1px 6px', background: 'rgba(214,54,56,0.15)', color: 'var(--danger)',
+    fontSize: 11, borderRadius: 4, lineHeight: 1.4, fontWeight: 600,
+  },
+  actions: { display: 'flex', gap: 4, flexShrink: 0 },
   createRow: {
     padding: '12px 14px 16px', borderTop: '1px solid rgba(0,0,0,0.07)',
   },
@@ -76,6 +81,16 @@ export default function Sidebar({ auth, activeChannelId, onSelectChannel }) {
     } catch {}
   }
 
+  async function handleDelete(e, channelId) {
+    e.stopPropagation()
+    if (!window.confirm('Delete this channel? This cannot be undone.')) return
+    try {
+      await deleteChannel(auth.token, channelId)
+      if (channelId === activeChannelId) onSelectChannel(null)
+      await refresh()
+    } catch {}
+  }
+
   async function handleJoin(channelId) {
     try {
       await joinChannel(auth.token, channelId)
@@ -104,7 +119,12 @@ export default function Sidebar({ auth, activeChannelId, onSelectChannel }) {
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.name}</span>
             </div>
             {hoveredChannelId === ch.id && (
-              <button style={s.leaveBtn} onClick={(e) => handleLeave(e, ch.id)} title="Leave channel">×</button>
+              <div style={s.actions}>
+                {ch.creator_id === auth.user_id && (
+                  <button style={s.deleteBtn} onClick={(e) => handleDelete(e, ch.id)} title="Delete channel">🗑</button>
+                )}
+                <button style={s.leaveBtn} onClick={(e) => handleLeave(e, ch.id)} title="Leave channel">×</button>
+              </div>
             )}
           </div>
         ))}

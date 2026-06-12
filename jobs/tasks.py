@@ -64,7 +64,7 @@ def cleanup_old_notifications(db, days: int = 30) -> dict:
 def send_notification_job(self, user_id: int, message_id: int) -> dict:
     db = _session_factory()
     try:
-        return send_notification(db, user_id, message_id)
+        result = send_notification(db, user_id, message_id)
     except Exception as exc:
         db.rollback()
         logger.warning(
@@ -76,6 +76,21 @@ def send_notification_job(self, user_id: int, message_id: int) -> dict:
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
     finally:
         db.close()
+
+    if result.get("status") == "success":
+        try:
+            import os
+            from flask_socketio import SocketIO as _SocketIO
+            emitter = _SocketIO(message_queue=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+            emitter.emit(
+                "notification",
+                {"notification_id": result["notification_id"], "message_id": message_id},
+                room=f"user:{user_id}",
+            )
+        except Exception:
+            pass
+
+    return result
 
 
 @celery.task(bind=True, max_retries=3, name="tasks.process_event_job")
